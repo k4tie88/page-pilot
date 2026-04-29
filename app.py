@@ -1,87 +1,79 @@
-import streamlit as st
-import pandas as pd
-import random
-
-# Konfigurace stránky
-st.set_page_config(page_title="PagePilot", page_icon="📚", layout="wide")
-
-# Vlastní CSS pro trochu "cool" vzhled
-st.markdown("""
-    <style>
-    .main {
-        background-color: #f5f7f9;
-    }
-    .stButton>button {
-        width: 100%;
-        border-radius: 5px;
-        height: 3em;
-        background-color: #ff4b4b;
-        color: white;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
-st.title("📚 PagePilot")
-st.subheader("Your personal book recommendation engine")
-
-# Sidebar pro nahrání souboru
-with st.sidebar:
-    st.header("Data Source")
-    uploaded_file = st.file_uploader("Upload Goodreads CSV", type="csv")
-    st.info("Tip: Export your data from Goodreads Settings > Export.")
+# --- LOGIKA FILTROVÁNÍ (Tady se děje to kouzlo) ---
 
 if uploaded_file:
     try:
-        # Načtení dat
         df = pd.read_csv(uploaded_file)
         
-        # Rozdělení na přečtené a k přečtení
-        read_books = df[df['Exclusive Shelf'] == 'read']
-        to_read_books = df[df['Exclusive Shelf'] == 'to-read']
+        # 1. Definujeme seznam "zakázaných" poliček
+        # Přidáme tam vše, co jsi psala + automaticky 'read'
+        blacklisted_shelves = [
+            'read', 
+            'did-not-finish', 
+            'author-to-avoid', 
+            'not-appealing', 
+            'never', 
+            'checked-but-not-interested'
+        ]
+
+        # 2. Vytvoříme čistý seznam k doporučení (Clean TBR)
+        # Musíme zkontrolovat 'Exclusive Shelf' i sloupec 'Bookshelves'
         
-        # Statistiky pro úvod
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Finished Books", len(read_books))
-        col2.metric("In To-Read List", len(to_read_books))
-        col3.metric("Avg. Rating", round(read_books['My Rating'].replace(0, pd.NA).mean(), 2))
+        def is_book_ok(row):
+            # Kontrola hlavní poličky
+            if row['Exclusive Shelf'] in blacklisted_shelves:
+                return False
+            
+            # Kontrola tagů (Bookshelves může obsahovat více hodnot oddělených čárkou)
+            if pd.notna(row['Bookshelves']):
+                tags = [t.strip() for t in str(row['Bookshelves']).split(',')]
+                if any(tag in blacklisted_shelves for tag in tags):
+                    return False
+            return True
+
+        # Aplikujeme filtr
+        potential_reads = df[df.apply(is_book_ok, axis=1)].copy()
+        
+        # Pro jistotu ještě vyhodíme vše, co máš v 'currently-reading' (pokud chceš fakt jen nové)
+        potential_reads = potential_reads[potential_reads['Exclusive Shelf'] != 'currently-reading']
+
+        # Statistiky pro ověření
+        read_count = len(df[df['Exclusive Shelf'] == 'read'])
+        st.write(f"✅ Ignored {len(df) - len(potential_reads)} books (read or blacklisted).")
+        st.write(f"🎯 Available for recommendation: {len(potential_reads)} books.")
 
         st.divider()
 
-        # SEKCE DOPORUČOVÁNÍ
-        st.header("🎯 What's Next?")
+        # --- SEKCE DOPORUČOVÁNÍ (What's Next?) ---
+        st.header("📍 Find Your Next Destination")
         
-        tab1, tab2, tab3 = st.tabs(["🎲 Random Pick", "🔥 Top Rated in TBR", "⏱️ Quick Read"])
+        if not potential_reads.empty:
+            tab1, tab2, tab3 = st.tabs(["🎲 Random Pick", "🔥 Community Gems", "⏱️ Quick Reads"])
 
-        with tab1:
-            if st.button("Surprise Me!"):
-                if not to_read_books.empty:
-                    book = to_read_books.sample(1).iloc[0]
-                    st.balloons()
+            with tab1:
+                if st.button("Surprise Me!"):
+                    # Tady je to "pokaždé jinak" - bereme náhodný vzorek
+                    book = potential_reads.sample(1).iloc[0]
                     st.success(f"### {book['Title']}")
-                    st.write(f"**Author:** {book['Author']}")
-                    st.write(f"**Pages:** {book['Number of Pages']}")
+                    st.write(f"**By {book['Author']}**")
+                    st.caption(f"Pages: {book['Number of Pages']} | Avg Rating: {book['Average Rating']}")
+                    st.markdown(f"[Open on Goodreads](https://www.goodreads.com/book/show/{book['Book Id']})")
+
+            with tab2:
+                st.write("Top rated books from your TBR list:")
+                # Vybereme 10 nejlepších a z nich náhodně ukážeme 3 (aby to nebylo pokaždé stejné)
+                top_10 = potential_reads.sort_values(by='Average Rating', ascending=False).head(10)
+                random_top = top_10.sample(min(3, len(top_10)))
+                st.table(random_top[['Title', 'Author', 'Average Rating']])
+
+            with tab3:
+                st.write("Short on time? Try these (under 300 pages):")
+                short_books = potential_reads[potential_reads['Number of Pages'] < 300]
+                if not short_books.empty:
+                    st.table(short_books.sample(min(3, len(short_books)))[['Title', 'Author', 'Number of Pages']])
                 else:
-                    st.warning("Your To-Read list is empty!")
-
-        with tab2:
-            st.write("Books in your To-Read list with the highest community rating (Average Rating):")
-            # Goodreads má 'Average Rating' pro celou komunitu
-            top_rated = to_read_books.sort_values(by='Average Rating', ascending=False).head(5)
-            st.table(top_rated[['Title', 'Author', 'Average Rating']])
-
-        with tab3:
-            st.write("Shortest books from your wishlist:")
-            short_books = to_read_books[to_read_books['Number of Pages'] > 0].sort_values(by='Number of Pages').head(5)
-            st.table(short_books[['Title', 'Author', 'Number of Pages']])
-
-        # BONUS: Analýza autora
-        st.divider()
-        st.header("📊 Your Favorite Authors")
-        top_authors = read_books.groupby('Author')['My Rating'].mean().sort_values(ascending=False).head(10)
-        st.bar_chart(top_authors)
+                    st.info("No short books found in your TBR.")
+        else:
+            st.warning("Whoops! It looks like you've filtered out everything. Time to add more books to Goodreads?")
 
     except Exception as e:
-        st.error(f"Error: {e}")
-else:
-    st.image("https://images.unsplash.com/photo-1507842217343-583bb7270b66?ixlib=rb-1.2.1&auto=format&fit=crop&w=1350&q=80")
-    st.write("Please upload your `goodreads_library_export.csv` to start the magic.")
+        st.error(f"Error processing data: {e}")
