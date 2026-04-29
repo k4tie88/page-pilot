@@ -1,71 +1,49 @@
 import streamlit as st
 import pandas as pd
-import random
-import re
 
-# Nastavení stránky
-st.set_page_config(page_title="ReadRoute 🧭", page_icon="📚")
-
-# Funkce pro vyčištění textu (odstraní =" a uvozovky)
-def clean_gr_logic(val):
-    if pd.isna(val): return ""
-    return re.sub(r'[="]', '', str(val)).strip()
-
+st.set_page_config(page_title="ReadRoute 🧭")
 st.title("🧭 ReadRoute")
-st.markdown("### Your simple book navigator")
 
-# Nahrávání souboru v sidebaru
-uploaded_file = st.sidebar.file_uploader("Upload Goodreads CSV", type="csv")
+uploaded_file = st.sidebar.file_uploader("Nahraj Goodreads CSV", type="csv")
 
 if uploaded_file:
     try:
-        # Načtení s ignorováním špatného kódování (řeší ty čtverečky)
-        df = pd.read_csv(uploaded_file, encoding='latin1', on_bad_lines='skip')
-        
-        # Srovnání názvů sloupců (odstraní mezery a opraví překlepy)
-        df.columns = [c.strip() for c in df.columns]
-        
-        # Vyčištění dat od =" "
-        for col in df.columns:
-            df[col] = df[col].apply(clean_gr_logic)
+        # Načtení - latin1 a ošetření neviditelných znaků na začátku (utf-8-sig)
+        try:
+            df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+        except:
+            uploaded_file.seek(0)
+            df = pd.read_csv(uploaded_file, encoding='latin1')
 
-        # Převod na čísla pro správné fungování
-        df['Number of Pages'] = pd.to_numeric(df['Number of Pages'], errors='coerce').fillna(0)
-        df['Average Rating'] = pd.to_numeric(df['Average Rating'], errors='coerce').fillna(0)
+        # OPRAVA: Vyčistíme názvy sloupců od všech nesmyslů
+        df.columns = df.columns.str.strip().str.replace('"', '')
 
-        # --- JEDNODUCHÝ FILTR ---
-        # Definujeme, co nechceme vidět
-        stop_list = ['read', 'did-not-finish', 'currently-reading']
-        
-        # Vyfiltrujeme TBR (To Be Read)
-        # Používáme .str.lower(), aby to bylo imunní vůči velkým písmenům
-        tbr = df[~df['Exclusive Shelf'].str.lower().isin(stop_list)].copy()
+        # TADY JE TA MAGIE: 
+        # Místo jména 'Exclusive Shelf' použijeme to, že je to 18. sloupec v pořadí
+        # (v Pythonu se počítá od nuly, takže 17)
+        shelf_col = df.columns[17] if len(df.columns) > 17 else None
+        title_col = df.columns[1] if len(df.columns) > 1 else None
+        author_col = df.columns[2] if len(df.columns) > 2 else None
 
-        st.success(f"Found {len(tbr)} books you haven't read yet!")
+        if shelf_col:
+            # Chceme jen to, co není 'read' a 'did-not-finish'
+            mask = ~df[shelf_col].str.lower().isin(['read', 'did-not-finish', 'currently-reading'])
+            tbr = df[mask].copy()
 
-        # --- DOPORUČOVACÍ SEKCE ---
-        if not tbr.empty:
-            tab1, tab2 = st.tabs(["🎲 Random Pick", "🏆 Best Rated"])
+            st.success(f"Načteno! Máš {len(tbr)} knih v pořadníku.")
 
-            with tab1:
-                if st.button("Give me a random book!"):
+            if not tbr.empty:
+                if st.button("🎲 Doporuč mi něco!"):
                     book = tbr.sample(1).iloc[0]
                     st.divider()
-                    st.subheader(book['Title'])
-                    st.write(f"**Author:** {book['Author']}")
-                    st.write(f"**Pages:** {int(book['Number of Pages'])}")
-                    st.markdown(f"[View on Goodreads](https://www.goodreads.com/book/show/{book['Book Id']})")
-
-            with tab2:
-                st.write("Highest rated by community:")
-                top_3 = tbr.sort_values(by='Average Rating', ascending=False).head(3)
-                for _, b in top_3.iterrows():
-                    st.write(f"⭐ {b['Average Rating']} - **{b['Title']}** ({b['Author']})")
+                    st.subheader(f"📖 {book[title_col]}")
+                    st.write(f"**Autor:** {book[author_col]}")
+            else:
+                st.warning("Seznam k přečtení je prázdný.")
         else:
-            st.warning("No books found in your To-Read list.")
+            st.error("Soubor vypadá jinak, než čekám. Zkusila jsi exportovat přímo z Goodreads?")
 
     except Exception as e:
-        st.error(f"Something went wrong: {e}")
-        st.info("Make sure you are uploading the original Goodreads CSV export.")
+        st.error(f"Chyba: {e}")
 else:
-    st.info("Waiting for your Goodreads CSV file...")
+    st.info("Nahraj CSV soubor vlevo v menu.")
