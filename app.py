@@ -1,49 +1,66 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="ReadRoute 🧭")
+st.set_page_config(page_title="ReadRoute 🧭", page_icon="📚")
 st.title("🧭 ReadRoute")
+
+# Funkce pro vyčištění ID (aby fungoval odkaz na web)
+def clean_id(val):
+    return str(val).replace('=', '').replace('"', '').strip()
 
 uploaded_file = st.sidebar.file_uploader("Nahraj Goodreads CSV", type="csv")
 
 if uploaded_file:
     try:
-        # Načtení - latin1 a ošetření neviditelných znaků na začátku (utf-8-sig)
+        # Načtení s ošetřením kódování (latin1 je pro GR export nejjistější)
         try:
             df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
         except:
             uploaded_file.seek(0)
             df = pd.read_csv(uploaded_file, encoding='latin1')
 
-        # OPRAVA: Vyčistíme názvy sloupců od všech nesmyslů
+        # Vyčištění názvů sloupců (odstraní mezery a neviditelné znaky)
         df.columns = df.columns.str.strip().str.replace('"', '')
 
-        # TADY JE TA MAGIE: 
-        # Místo jména 'Exclusive Shelf' použijeme to, že je to 18. sloupec v pořadí
-        # (v Pythonu se počítá od nuly, takže 17)
-        shelf_col = df.columns[17] if len(df.columns) > 17 else None
-        title_col = df.columns[1] if len(df.columns) > 1 else None
-        author_col = df.columns[2] if len(df.columns) > 2 else None
+        # Dynamické určení sloupců podle pořadí (neprůstřelná metoda)
+        title_col = next((c for c in df.columns if 'Title' in c), df.columns[1])
+        author_col = next((c for c in df.columns if 'Author' in c and 'l-f' not in c), df.columns[2])
+        shelf_col = next((c for c in df.columns if 'Shelf' in c), df.columns[17])
+        id_col = 'Book Id'
 
-        if shelf_col:
-            # Chceme jen to, co není 'read' a 'did-not-finish'
-            mask = ~df[shelf_col].str.lower().isin(['read', 'did-not-finish', 'currently-reading'])
-            tbr = df[mask].copy()
+        # FILTR: Nechceme 'read', 'did-not-finish' a to, co zrovna čteš
+        forbidden = ['read', 'did-not-finish', 'currently-reading']
+        tbr = df[~df[shelf_col].str.lower().isin(forbidden)].copy()
 
-            st.success(f"Načteno! Máš {len(tbr)} knih v pořadníku.")
+        st.success(f"Načteno! Máš {len(tbr)} knih k výběru.")
 
-            if not tbr.empty:
-                if st.button("🎲 Doporuč mi něco!"):
-                    book = tbr.sample(1).iloc[0]
-                    st.divider()
-                    st.subheader(f"📖 {book[title_col]}")
-                    st.write(f"**Autor:** {book[author_col]}")
-            else:
-                st.warning("Seznam k přečtení je prázdný.")
+        if not tbr.empty:
+            if st.button("🎲 Doporuč mi další knihu"):
+                book = tbr.sample(1).iloc[0]
+                
+                # Vyčištění ID a vytvoření odkazu
+                book_id = clean_id(book[id_col])
+                gr_url = f"https://www.goodreads.com/book/show/{book_id}"
+                
+                st.divider()
+                st.subheader(f"📖 {book[title_col]}")
+                st.write(f"**Autor:** {book[author_col]}")
+                
+                # Odkaz přímo na Goodreads
+                st.link_button("Otevřít na Goodreads ↗", gr_url)
+                
+                # Pokud jsou dostupné stránky, ukážeme je
+                if 'Number of Pages' in book:
+                    try:
+                        pages = int(float(book['Number of Pages']))
+                        if pages > 0:
+                            st.caption(f"Délka: {pages} stran")
+                    except:
+                        pass
         else:
-            st.error("Soubor vypadá jinak, než čekám. Zkusila jsi exportovat přímo z Goodreads?")
+            st.warning("V seznamu To-Read nic nezbylo.")
 
     except Exception as e:
-        st.error(f"Chyba: {e}")
+        st.error(f"Chyba při zpracování: {e}")
 else:
-    st.info("Nahraj CSV soubor vlevo v menu.")
+    st.info("Nahraj CSV soubor z Goodreads v levém panelu.")
