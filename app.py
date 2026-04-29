@@ -9,19 +9,28 @@ st.set_page_config(page_title="ReadRoute 🧭", page_icon="📚", layout="wide")
 st.markdown("""
     <style>
     .stTabs [aria-selected="true"] { background-color: #ff4b4b !important; color: white !important; }
-    div.stButton > button { background-color: #ff4b4b; color: white; border-radius: 10px; font-weight: bold; width: 100%; }
-    .book-card { background-color: white; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4b4b; box-shadow: 2px 2px 5px rgba(0,0,0,0.1); }
+    div.stButton > button { background-color: #ff4b4b; color: white; border-radius: 10px; font-weight: bold; }
+    .book-card { background-color: white; padding: 20px; border-radius: 10px; border-left: 5px solid #ff4b4b; box-shadow: 2px 2px 5px rgba(0,0,0,0.1); margin-bottom: 15px; }
     </style>
     """, unsafe_allow_html=True)
 
 st.title("🧭 ReadRoute")
-st.write("Your personal navigation through the world of books")
 
-# --- POMOCNÉ FUNKCE PRO ČIŠTĚNÍ ---
+# --- POMOCNÉ FUNKCE ---
 def super_clean(val):
-    """Odstraní =" " a uvozovky z jakékoliv hodnoty."""
     if pd.isna(val): return ""
     return re.sub(r'[="]', '', str(val)).strip()
+
+def load_data(file):
+    # Zkusíme nejčastější kódování, které CSV používají
+    encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
+    for encoding in encodings:
+        try:
+            file.seek(0) # Reset streamu
+            return pd.read_csv(file, encoding=encoding, on_bad_lines='skip')
+        except UnicodeDecodeError:
+            continue
+    return None
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -29,99 +38,86 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Upload Goodreads CSV", type="csv")
     st.divider()
     max_pages = st.slider("Max pages", 50, 1500, 1500)
-    st.caption("Filters active: Skipping read, DNF, and your personal blacklists.")
 
 # --- LOGIKA ---
 if uploaded_file:
-    try:
-        # Čteme CSV (vynutíme kódování a ošetříme chyby v řádcích)
-        df = pd.read_csv(uploaded_file, on_bad_lines='skip', encoding='utf-8')
-        
-        # VYČIŠTĚNÍ CELÉHO DATAFRAMU (tady řešíme ty KeyError a uvozovky)
-        # Uděláme kopii a vyčistíme názvy sloupců i data
-        df.columns = [c.strip() for c in df.columns]
-        for col in df.columns:
-            df[col] = df[col].apply(super_clean)
-
-        # Převod důležitých sloupců na čísla
-        df['Number of Pages'] = pd.to_numeric(df['Number of Pages'], errors='coerce').fillna(0)
-        df['Average Rating'] = pd.to_numeric(df['Average Rating'], errors='coerce').fillna(0)
-        df['My Rating'] = pd.to_numeric(df['My Rating'], errors='coerce').fillna(0)
-
-        # ČERNÁ LISTINA
-        blacklist = [
-            'read', 'did-not-finish', 'author-to-avoid', 
-            'not-appealing', 'never', 'checked-but-not-interested', 'currently-reading'
-        ]
-
-        # FILTROVÁNÍ
-        def is_it_pickable(row):
-            # 1. Kontrola hlavní poličky
-            shelf = str(row.get('Exclusive Shelf', '')).lower()
-            if shelf in blacklist or not shelf:
-                return False
+    df = load_data(uploaded_file)
+    
+    if df is not None:
+        try:
+            # Vyčištění názvů sloupců (mezery)
+            df.columns = [c.strip() for c in df.columns]
             
-            # 2. Kontrola všech tagů v Bookshelves
-            tags = str(row.get('Bookshelves', '')).lower()
-            if any(b in tags for b in blacklist):
-                return False
+            # Plošné vyčištění všech dat od =" "
+            for col in df.columns:
+                df[col] = df[col].apply(super_clean)
+
+            # Převod čísel
+            df['Number of Pages'] = pd.to_numeric(df['Number of Pages'], errors='coerce').fillna(0)
+            df['Average Rating'] = pd.to_numeric(df['Average Rating'], errors='coerce').fillna(0)
+
+            # Definice černé listiny
+            blacklist = [
+                'read', 'did-not-finish', 'author-to-avoid', 
+                'not-appealing', 'never', 'checked-but-not-interested', 'currently-reading'
+            ]
+
+            # Filtrování (používáme .get() kvůli bezpečnosti názvů)
+            def is_it_pickable(row):
+                # Exclusive Shelf (opraven překlep v kódu)
+                shelf = str(row.get('Exclusive Shelf', '')).lower()
+                if shelf in blacklist or not shelf:
+                    return False
+                # Bookshelves tagy
+                tags = str(row.get('Bookshelves', '')).lower()
+                if any(b in tags for b in blacklist):
+                    return False
+                return True
+
+            tbr = df[df.apply(is_it_pickable, axis=1)].copy()
             
-            return True
+            if max_pages < 1500:
+                tbr = tbr[tbr['Number of Pages'] <= max_pages]
 
-        # Vytvoření seznamu k doporučení
-        tbr = df[df.apply(is_it_pickable, axis=1)].copy()
-        
-        # Filtr stránek
-        if max_pages < 1500:
-            tbr = tbr[tbr['Number of Pages'] <= max_pages]
-
-        # STATS
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Books in TBR", len(tbr))
-        c2.metric("Total in CSV", len(df))
-        c3.metric("Avg Community ⭐", f"{tbr['Average Rating'].mean():.2f}")
-
-        st.divider()
-
-        # ZÁLOŽKY S DOPORUČENÍM
-        if not tbr.empty:
-            tab1, tab2, tab3 = st.tabs(["🎲 Surprise Me", "🏆 Best Rated", "⚡ Short Reads"])
+            # UI - Sekce
+            st.success(f"Successfully loaded! {len(tbr)} books ready for recommendation.")
+            
+            tab1, tab2, tab3 = st.tabs(["🎲 Random Pick", "🏆 Top Rated", "⏱️ Quick Reads"])
 
             with tab1:
-                if st.button("Generate Random Recommendation"):
-                    book = tbr.sample(1).iloc[0]
-                    st.markdown(f"""
-                    <div class="book-card">
-                        <h3>{book['Title']}</h3>
-                        <p><b>Author:</b> {book['Author']}<br>
-                        <b>Pages:</b> {int(book['Number of Pages'])} | <b>Rating:</b> {book['Average Rating']} ⭐</p>
-                        <a href="https://www.goodreads.com/book/show/{book['Book Id']}" target="_blank">View on Goodreads ↗</a>
-                    </div>
-                    """, unsafe_allow_html=True)
+                if st.button("Generate Next Read"):
+                    if not tbr.empty:
+                        book = tbr.sample(1).iloc[0]
+                        st.markdown(f"""
+                        <div class="book-card">
+                            <h3>{book['Title']}</h3>
+                            <p><b>Author:</b> {book['Author']}<br>
+                            <b>Pages:</b> {int(book['Number of Pages'])} | <b>Rating:</b> {book['Average Rating']} ⭐</p>
+                            <a href="https://www.goodreads.com/book/show/{book['Book Id']}" target="_blank">View on Goodreads ↗</a>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else:
+                        st.warning("No books found.")
 
             with tab2:
-                # Top 10 podle hodnocení a z nich náhodné 3
-                top_selection = tbr.sort_values(by='Average Rating', ascending=False).head(10)
-                random_top = top_selection.sample(min(3, len(top_selection)))
-                for _, b in random_top.iterrows():
-                    st.write(f"📖 **{b['Title']}** ({b['Average Rating']} ⭐)")
-                    st.caption(f"by {b['Author']} | [Link](https://www.goodreads.com/book/show/{b['Book Id']})")
-                    st.divider()
+                top_3 = tbr.sort_values(by='Average Rating', ascending=False).head(10)
+                if not top_3.empty:
+                    for _, b in top_3.sample(min(3, len(top_3))).iterrows():
+                        st.write(f"📖 **{b['Title']}** ({b['Average Rating']} ⭐)")
+                        st.caption(f"by {b['Author']} | [Goodreads](https://www.goodreads.com/book/show/{b['Book Id']})")
+                        st.divider()
 
             with tab3:
-                # Knihy s nejmenším počtem stran (ale víc než 0)
                 shorts = tbr[tbr['Number of Pages'] > 0].sort_values(by='Number of Pages').head(10)
                 if not shorts.empty:
-                    random_shorts = shorts.sample(min(3, len(shorts)))
-                    for _, b in random_shorts.iterrows():
+                    for _, b in shorts.sample(min(3, len(shorts))).iterrows():
                         st.write(f"⏱️ **{b['Title']}** ({int(b['Number of Pages'])} pages)")
-                        st.caption(f"by {b['Author']} | [Link](https://www.goodreads.com/book/show/{b['Book Id']})")
+                        st.caption(f"by {b['Author']} | [Goodreads](https://www.goodreads.com/book/show/{b['Book Id']})")
                         st.divider()
-        else:
-            st.warning("No books found matching your criteria!")
 
-    except Exception as e:
-        st.error(f"Critical error: {e}")
-        st.info("Try to re-download the CSV from Goodreads if the error persists.")
+        except Exception as e:
+            st.error(f"Error processing columns: {e}")
+    else:
+        st.error("Could not decode CSV. Please try to export it again from Goodreads.")
 else:
-    st.info("Please upload your Goodreads CSV to start.")
+    st.info("Upload your Goodreads export (CSV) to start.")
