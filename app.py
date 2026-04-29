@@ -3,65 +3,69 @@ import pandas as pd
 import random
 import re
 
-st.set_page_config(page_title="ReadRoute 🧭", layout="wide")
+# Nastavení stránky
+st.set_page_config(page_title="ReadRoute 🧭", page_icon="📚")
 
-# Funkce, která vyčistí ty otravné =" " od Goodreads
-def clean_val(val):
+# Funkce pro vyčištění textu (odstraní =" a uvozovky)
+def clean_gr_logic(val):
     if pd.isna(val): return ""
     return re.sub(r'[="]', '', str(val)).strip()
 
 st.title("🧭 ReadRoute")
-st.write("Nahraj export a já ti vyberu, co číst dál (vynechám přečtené).")
+st.markdown("### Your simple book navigator")
 
+# Nahrávání souboru v sidebaru
 uploaded_file = st.sidebar.file_uploader("Upload Goodreads CSV", type="csv")
 
 if uploaded_file:
     try:
-        # Zkusíme načíst soubor (ošetření kódování)
+        # Načtení s ignorováním špatného kódování (řeší ty čtverečky)
         df = pd.read_csv(uploaded_file, encoding='latin1', on_bad_lines='skip')
         
-        # 1. Vyčistíme názvy sloupců (odstraníme mezery)
+        # Srovnání názvů sloupců (odstraní mezery a opraví překlepy)
         df.columns = [c.strip() for c in df.columns]
         
-        # 2. Vyčistíme všechna data od =" " a uvozovek
+        # Vyčištění dat od =" "
         for col in df.columns:
-            df[col] = df[col].apply(clean_val)
+            df[col] = df[col].apply(clean_gr_logic)
 
-        # 3. Převedeme čísla, aby fungovalo řazení
+        # Převod na čísla pro správné fungování
         df['Number of Pages'] = pd.to_numeric(df['Number of Pages'], errors='coerce').fillna(0)
         df['Average Rating'] = pd.to_numeric(df['Average Rating'], errors='coerce').fillna(0)
 
-        # 4. JEDNODUCHÝ FILTR (To, co jsi chtěla)
-        # Chceme jen věci, které NEJSOU "read" a NEJSOU "did-not-finish"
-        forbidden = ['read', 'did-not-finish']
+        # --- JEDNODUCHÝ FILTR ---
+        # Definujeme, co nechceme vidět
+        stop_list = ['read', 'did-not-finish', 'currently-reading']
         
-        # Filtrujeme podle hlavního sloupce Exclusive Shelf
-        tbr = df[~df['Exclusive Shelf'].str.lower().isin(forbidden)].copy()
-        # Vyhodíme i "currently-reading", ať ti to nenabízí to, co zrovna držíš v ruce
-        tbr = tbr[tbr['Exclusive Shelf'].str.lower() != 'currently-reading']
+        # Vyfiltrujeme TBR (To Be Read)
+        # Používáme .str.lower(), aby to bylo imunní vůči velkým písmenům
+        tbr = df[~df['Exclusive Shelf'].str.lower().isin(stop_list)].copy()
 
-        st.success(f"Načteno! Máš {len(tbr)} knih k přečtení.")
+        st.success(f"Found {len(tbr)} books you haven't read yet!")
 
-        # DOPORUČOVÁK
+        # --- DOPORUČOVACÍ SEKCE ---
         if not tbr.empty:
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("🎲 Náhodný tip"):
-                    book = tbr.sample(1).iloc[0]
-                    st.info(f"### {book['Title']}")
-                    st.write(f"**Autor:** {book['Author']}")
-                    st.write(f"**Stran:** {int(book['Number of Pages'])}")
-                    # Odkaz na Goodreads (vyčištěné ID)
-                    st.markdown(f"[Kouknout na Goodreads](https://www.goodreads.com/book/show/{book['Book Id']})")
+            tab1, tab2 = st.tabs(["🎲 Random Pick", "🏆 Best Rated"])
 
-            with col2:
-                st.subheader("🔥 Nejlépe hodnocené (TBR)")
-                top_books = tbr.sort_values(by='Average Rating', ascending=False).head(5)
-                for i, row in top_books.iterrows():
-                    st.write(f"⭐ {row['Average Rating']} - **{row['Title']}**")
+            with tab1:
+                if st.button("Give me a random book!"):
+                    book = tbr.sample(1).iloc[0]
+                    st.divider()
+                    st.subheader(book['Title'])
+                    st.write(f"**Author:** {book['Author']}")
+                    st.write(f"**Pages:** {int(book['Number of Pages'])}")
+                    st.markdown(f"[View on Goodreads](https://www.goodreads.com/book/show/{book['Book Id']})")
+
+            with tab2:
+                st.write("Highest rated by community:")
+                top_3 = tbr.sort_values(by='Average Rating', ascending=False).head(3)
+                for _, b in top_3.iterrows():
+                    st.write(f"⭐ {b['Average Rating']} - **{b['Title']}** ({b['Author']})")
         else:
-            st.warning("V seznamu TBR nic nezbylo.")
+            st.warning("No books found in your To-Read list.")
 
     except Exception as e:
-        st.error(f"Chyba: {e}")
+        st.error(f"Something went wrong: {e}")
+        st.info("Make sure you are uploading the original Goodreads CSV export.")
+else:
+    st.info("Waiting for your Goodreads CSV file...")
